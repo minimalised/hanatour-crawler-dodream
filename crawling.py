@@ -40,15 +40,15 @@ async def generate_naver_titles_llm(data):
 2. 중복 제거: 단일 상품명 내부에서 동일한 단어(ex: 방콕, 여행, 패키지 등)가 2회 이상 중복 나열되는 것을 절대 금지한다.
 3. 정제성: '신상품', '세이브', '특가', '대박', '★' 같은 홍보성 문구나 특수문자는 절대 포함하지 않는다.
 4. 출발지 조건 규칙: [지정 출발공항]이 '없음'일 경우 '기본출발' 등을 임의로 조작하지 말고 무조건 곧바로 지역명/브랜드명으로 시작한다.
+5. 🌟 [신규] 결과물 간 상호 중복 엄금: 생성되는 12개의 상품명은 조사나 어순만 바꾼 수준이 아니라 완전히 다른 키워드 조합을 가져야 한다.
 
 [🎯 콘셉트별 상세 생성 규칙]
-■ 콘셉트 A (정석 SEO형 - 3개): 감성적 수식어를 배제하고, 검색량이 높은 실용적 핵심 키워드(지역명+타겟+핵심조건) 위주의 명사 나열 조합.
-■ 콘셉트 B (타겟/상황형 - 3개): 소비자가 떠나는 이유와 타겟을 전면 강조. (ex: 부모님 효도, 아이동반, 여름휴가 등 타겟 키워드 1개 이상 융합)
-■ 콘셉트 C (혜택/USP형 - 3개): 소비자가 직관적으로 이득을 느끼는 프리미엄 혜택 명사화 강조. (ex: 5성호텔, 자유시간, 전일정식사 등 융합)
-■ 콘셉트 D (감성/트렌디형 - 3개): 인스타/릴스 감성의 카피라이팅 가미. (ex: 요즘뜨는, 인생샷, 감성숙소 등 트렌디 단어 자연스럽게 융합)
+■ 콘셉트 A (정석 SEO형 - 3개): 감성적 수식어를 배제하고, 검색량이 높은 실용적 핵심 키워드 위주의 명사 나열 조합. (3개 간 키워드 순서를 다르게 분산할 것)
+■ 콘셉트 B (타겟/상황형 - 3개): 소비자가 떠나는 이유와 타겟을 전면 강조. (ex: 부모님 효도, 아이동반, 여름휴가 등 타겟 키워드를 각각 다르게 융합)
+■ 콘셉트 C (혜택/USP형 - 3개): 소비자가 직관적으로 이득을 느끼는 프리미엄 혜택 명사화 강조. (ex: 5성호텔, 자유시간, 전일정식사 등 각각 다르게 융합)
+■ 콘셉트 D (감성/트렌디형 - 3개): 인스타/릴스 감성의 카피라이팅 가미. (ex: 요즘뜨는, 인생샷, 감성숙소 등 감성 단어가 겹치지 않게 분산)
 """
     
-    # 🌟 [보완] 규격 이탈을 원천 차단하는 OpenAI 공식 Structured Outputs 적용
     json_schema_format = {
         "type": "json_schema",
         "json_schema": {
@@ -84,16 +84,25 @@ async def generate_naver_titles_llm(data):
         )
         
         res_json = json.loads(response.choices[0].message.content)
-        return (
-            res_json.get("A_1", "").strip(), res_json.get("A_2", "").strip(), res_json.get("A_3", "").strip(),
-            res_json.get("B_1", "").strip(), res_json.get("B_2", "").strip(), res_json.get("B_3", "").strip(),
-            res_json.get("C_1", "").strip(), res_json.get("C_2", "").strip(), res_json.get("C_3", "").strip(),
-            res_json.get("D_1", "").strip(), res_json.get("D_2", "").strip(), res_json.get("D_3", "").strip()
-        )
+        
+        # 12개 결과물을 안전하게 리스트로 파싱
+        titles_list = [
+            res_json.get(f"{concepts}_{i}", "").strip() 
+            for concepts in ['A', 'B', 'C', 'D'] 
+            for i in [1, 2, 3]
+        ]
+        
+        # 중복 체크 메커니즘 작동
+        unique_titles = set(titles_list)
+        if len(unique_titles) < 12:
+            print(f"⚠️ [경고] LLM 결과물 중 중복 상품명 발생! (고유 개수: {len(unique_titles)}/12개)")
+            
+        return tuple(titles_list)
+
     except Exception as e:
         print(f"❌ LLM 12개 상품명 생성 중 에러 발생: {e}")
         err_t = f"[Error] {data['pure_title']}"
-        return [err_t] * 12 # 🌟 [정정] 튜플이 아닌 깨끗한 12개 문자열 리스트로 반환하도록 완전 조치
+        return tuple([err_t] * 12)  # 구조 깨짐 방지를 위해 12개 튜플로 반환
 
 
 async def process_single_product(item, target_region, target_airport, current_url, existing_titles_dict, runtime_titles_dict):
