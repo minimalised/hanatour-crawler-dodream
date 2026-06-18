@@ -8,9 +8,12 @@ from google.oauth2.service_account import Credentials
 from playwright.async_api import async_playwright
 from openai import AsyncOpenAI
 
-# OpenAI 및 구글 시트 기본 설정
+# OpenAI 기본 설정
 openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", "YOUR_LOCAL_API_KEY"))
-SPREADSHEET_ID = "1mH51VHs4y0FgClkUBvZgw7oY3Yv7gQBA_a3um9uhX0I"
+
+# ✅ GitHub Secrets 이름과 1:1 매칭 완료
+SOURCE_SPREADSHEET_ID = os.environ.get("SOURCE_SPREADSHEET_ID")
+TARGET_SPREADSHEET_ID = os.environ.get("TARGET_SPREADSHEET_ID")
 
 # 총 5개 콘셉트 x 3개씩 = 총 15개 타이틀 마스터 컬럼 정의
 CONCEPTS = ['A', 'B', 'C', 'D', 'E']
@@ -35,13 +38,12 @@ def get_gspread_client():
 
 
 # ==========================================
-# [함수 2] 단일 LLM 타이틀 생성기 (글자 수 기준 통일 + 문장부호 정제)
+# [함수 2] 단일 LLM 타이틀 생성기
 # ==========================================
 async def generate_naver_titles_llm(p, semaphore):
     """
     단일 상품 1개에 완벽히 몰입하여, 네이버 SEO 가이드라인에 맞춘
     공백 포함 35자~45자 사이의 묵직한 명사구 타이틀 15개를 생성합니다.
-    (쉼표, 느낌표, 물결 부호 전면 제거 및 대시 기호 치환 적용)
     """
     async with semaphore:
         departure = f"[{p['출발공항']}출발]" if p['출발공항'] != "없음" else ""
@@ -61,7 +63,6 @@ async def generate_naver_titles_llm(p, semaphore):
         elif price_grade == "프리미엄":
             grade_rule = "- 등급 소구: 하이엔드 고가 라인입니다. '프리미엄' 단어는 쓰지 말고 [노쇼핑노팁], [풀옵션보장], [여유로운자유시간], [전일정5성급호텔숙박] 등의 고급 키워드를 전면에 배치하세요."
 
-        # ✅ 수정 1: 글자 수 기준을 35자~45자로 전 항목 통일
         prompt = f"""
 당신은 네이버 쇼핑 검색 최적화(SEO) 및 소비자 클릭률(CTR)을 극대화하는 국내 최고 수준의 퍼포먼스 마케팅 카피라이팅 전문가입니다.
 제공된 여행 상품 데이터를 분석하여, 로봇이 공장에서 찍어낸 것 같은 흔적을 완벽히 지우고 실제 베테랑 마케터가 숨을 불어넣은 듯한 차별화된 상품명 15개를 생성하세요.
@@ -80,7 +81,7 @@ async def generate_naver_titles_llm(p, semaphore):
 
 [❌ 전 콘셉트 공통 제약 가이드라인]
 1. 글자 수 제약: 모든 상품명은 공백 포함 최소 35자 ~ 최대 45자 사이로 풍성하게 구성한다. (45자 절대 초과 금지)
-2. ★ 문장부호 사용 제한 및 정제 규칙 ★: 최종 생성되는 모든 상품명 내부에는 쉼표(,), 느낌표(!), 물결(~), 플러스(+) 같은 부호나 특수문자를 절대 포함할 수 없다. 기간이나 범위를 표현할 때 물결 기호(ex: 5~6일)가 필요하다면 무조건 붙임표 대시 기호(ex: 5-6일)로 치환하여 작성해야 한다. 쉼표와 느낌표가 들어갈 자리는 깔끔하게 공백(띄어쓰기) 처리한다.
+2. ★ 문장부호 사용 제한 및 정제 규칙 ★: 최종 생성되는 모든 상품명 내부에는 쉼표(,), 느낌표(!), 물결(~), 플러스(+) 같은 부호나 특수문자를 절대 포함할 수 없다. 기간이나 범위를 표현할 때 물결 기호(ex: 5~6일)가 필요하다면 무조건 붙임표 대시 기호(ex: 5-6일)로 치환하여 작성해야 한다. 쉼표และ 느낌표가 들어갈 자리는 깔끔하게 공백(띄어쓰기) 처리한다.
 3. 날것 노출 금지: '#' 기호나 해시태그 형태를 그대로 노출하지 마라. (ex: #디너크루즈 -> 로맨틱디너크루즈투어, #아티타야CC -> 아티타야CC품격라운딩)
 4. 정제성: '신상품', '특가', '대박' 같은 유치한 홍보성 접두사나 특수문자는 전면 배제한다. 최종 출력물 텍스트 내부에 "주의:", "경고:", "가이드:" 등 시스템 지시어 성격의 텍스트를 삽입하는 것을 절대 금지한다.
 5. 문장 자율성: 기계적인 명사 나열에만 집착하지 말고, 조사와 마케팅 수식어를 자연스럽게 결합하여 소비자가 읽었을 때 매력적인 '명사구' 형태로 늘려라. "행복한여행", "특별한여정" 같이 글자 수 채우기용 무의미한 콤보 수식어는 남발하지 마라.
@@ -135,12 +136,21 @@ async def generate_naver_titles_llm(p, semaphore):
 # [함수 3] 메인 크롤러 및 데이터 파이프라인 엔진
 # ==========================================
 async def run_pipeline():
-    gc = get_gspread_client()
-    doc = gc.open_by_key(SPREADSHEET_ID)
+    if not SOURCE_SPREADSHEET_ID or not TARGET_SPREADSHEET_ID:
+        print("❌ [오류] SOURCE_SPREADSHEET_ID 또는 TARGET_SPREADSHEET_ID 환경 변수가 설정되지 않았습니다.")
+        return
 
-    # 1. 구글 스프레드시트에서 타겟 URL 리스트 가져오기
+    gc = get_gspread_client()
+    
+    # SOURCE_SPREADSHEET_ID에서 상품 리스트 로드
     print("📥 [1단계] 타겟 상품리스트 URL 로드 중...")
-    target_rows = doc.worksheet("상품리스트").get_all_values()[1:]
+    try:
+        source_doc = gc.open_by_key(SOURCE_SPREADSHEET_ID)
+        target_rows = source_doc.worksheet("상품리스트").get_all_values()[1:]
+    except Exception as e:
+        print(f"❌ 소스 시트 로드 실패 (ID: {SOURCE_SPREADSHEET_ID}): {e}")
+        return
+
     target_tasks = []
     for r in target_rows:
         if r and r[0].startswith("http"):
@@ -167,7 +177,6 @@ async def run_pipeline():
         page = await context.new_page()
 
         for task in target_tasks:
-            # ✅ 수정 2: 크롤링 재시도 로직 추가 (최대 3회)
             MAX_RETRIES = 3
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
@@ -186,11 +195,10 @@ async def run_pipeline():
                     needed_scrolls = (total_count - 1) // 20
                     for _ in range(needed_scrolls):
                         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        # ✅ 수정 3: 고정 슬립 대신 네트워크 안정화 대기 추가
                         try:
                             await page.wait_for_load_state("networkidle", timeout=5000)
                         except:
-                            await asyncio.sleep(1.5)  # networkidle 타임아웃 시 폴백
+                            await asyncio.sleep(1.5)
 
                     items = await page.query_selector_all(".prod_list_wrap ul.type > li")
                     for item in items:
@@ -229,7 +237,6 @@ async def run_pipeline():
                         if img_url and img_url.startswith("//"):
                             img_url = "https:" + img_url
 
-                        # ✅ 수정 4: 이미지 URL 빈 값 경고 로깅
                         if not img_url:
                             print(f"⚠️ 이미지 URL 없음: 상품명={full_title[:20]}")
 
@@ -246,14 +253,14 @@ async def run_pipeline():
                             "출발공항": task['airport']
                         })
 
-                    break  # 성공 시 재시도 루프 탈출
+                    break
 
                 except Exception as e:
                     print(f"⚠️ [{attempt}/{MAX_RETRIES}] URL 예외 발생 ({task['url']}): {e}")
                     if attempt == MAX_RETRIES:
                         print(f"❌ 최대 재시도 횟수 초과. 해당 URL 최종 스킵: {task['url']}")
                     else:
-                        await asyncio.sleep(2)  # 재시도 전 잠시 대기
+                        await asyncio.sleep(2)
 
         await browser.close()
 
@@ -266,32 +273,28 @@ async def run_pipeline():
     for col in TITLE_COLUMNS:
         df_final[col] = ""
 
-    target_s_id = os.environ.get("TARGET_SPREADSHEET_ID")
     worksheet_name = "github"
 
-    # ✅ 수정 5: 증분 매핑 조건 수정 — fillna 전 merge, 이후 빈 문자열만 체크
-    if target_s_id:
-        try:
-            target_doc = gc.open_by_key(target_s_id)
-            old_records = target_doc.worksheet(worksheet_name).get_all_records()
-            if old_records:
-                df_old = pd.DataFrame(old_records)
-                if all(col in df_old.columns for col in ["ID"] + TITLE_COLUMNS):
-                    df_old_titles = df_old[["ID"] + TITLE_COLUMNS].drop_duplicates(subset=["ID"])
-                    df_final = pd.merge(
-                        df_final.drop(columns=TITLE_COLUMNS, errors='ignore'),
-                        df_old_titles,
-                        on="ID",
-                        how="left"
-                    )
-                    # fillna는 merge 직후 한 번만 적용
-                    for col in TITLE_COLUMNS:
-                        df_final[col] = df_final[col].fillna("")
-                    print("✅ [스마트 증분] 기존 적재된 15대 콘셉트 타이틀 매핑 성공 및 LLM 차단 보전 완료.")
-        except Exception as e:
-            print(f"ℹ️ 기존 적재 시트 대조 패스: {e}")
+    # TARGET_SPREADSHEET_ID에서 기존 적재 타이틀 비교 연산 진행
+    try:
+        target_doc = gc.open_by_key(TARGET_SPREADSHEET_ID)
+        old_records = target_doc.worksheet(worksheet_name).get_all_records()
+        if old_records:
+            df_old = pd.DataFrame(old_records)
+            if all(col in df_old.columns for col in ["ID"] + TITLE_COLUMNS):
+                df_old_titles = df_old[["ID"] + TITLE_COLUMNS].drop_duplicates(subset=["ID"])
+                df_final = pd.merge(
+                    df_final.drop(columns=TITLE_COLUMNS, errors='ignore'),
+                    df_old_titles,
+                    on="ID",
+                    how="left"
+                )
+                for col in TITLE_COLUMNS:
+                    df_final[col] = df_final[col].fillna("")
+                print("✅ [스마트 증분] 기존 적재된 15대 콘셉트 타이틀 매핑 성공 및 LLM 차단 보전 완료.")
+    except Exception as e:
+        print(f"ℹ️ 기존 적재 시트 대조 패스 (신규 생성 처리 예정): {e}")
 
-    # ✅ 수정 6: 신규 판별 조건 — 빈 문자열 체크만 사용 (isna 제거)
     is_new_product = df_final["A_1"] == ""
     df_need_llm = df_final[is_new_product].copy()
 
@@ -299,7 +302,7 @@ async def run_pipeline():
 
     if len(df_need_llm) > 0:
         records_to_llm = df_need_llm.to_dict(orient="records")
-        sem = asyncio.Semaphore(LLM_CONCURRENCY)  # ✅ 수정 7: 세마포어 환경 변수화
+        sem = asyncio.Semaphore(LLM_CONCURRENCY)
         tasks = [generate_naver_titles_llm(p, sem) for p in records_to_llm]
 
         print(f"🔗 총 {len(tasks)}개의 상품을 각각 개별 독립 프롬프트로 분할하여 OpenAI 서버로 동시 발송합니다...")
@@ -309,7 +312,6 @@ async def run_pipeline():
         for p_id, res in llm_results:
             if not res:
                 continue
-            # ✅ 수정 8: IndexError 방어 처리
             matched = df_final[df_final["ID"] == p_id]
             if matched.empty:
                 print(f"⚠️ 매핑 실패: ID '{p_id}'가 df_final에 존재하지 않습니다. 스킵합니다.")
@@ -320,25 +322,18 @@ async def run_pipeline():
 
     # 6. 최종 데이터 적재
     print(f"\n💾 [6단계] 최종 데이터 적재 준비 (총 {len(df_final)}개 상품)...")
-
-    # ✅ 수정 9: reindex로 KeyError 방어 (컬럼 누락 시 빈 값으로 안전 처리)
     df_final = df_final.reindex(columns=COLUMN_ORDER, fill_value="")
-
     data_to_upload = [df_final.columns.values.tolist()] + df_final.values.tolist()
 
-    if target_s_id:
-        try:
-            target_doc = gc.open_by_key(target_s_id)
-            sheet = target_doc.worksheet(worksheet_name)
-            sheet.clear()
-            sheet.update(values=data_to_upload, range_name='A1')
-            print(f"🚀 [적재 완료] Secrets 타겟 시트 [{target_doc.title}] 동기화 성공!")
-        except Exception as e:
-            print(f"❌ 시트 적재 실패 (ID: {target_s_id}): {e}")
-    else:
-        print("⚠️ [경고] TARGET_SPREADSHEET_ID 환경 변수가 설정되지 않아 구글 시트에 적재하지 못했습니다.")
+    try:
+        target_doc = gc.open_by_key(TARGET_SPREADSHEET_ID)
+        sheet = target_doc.worksheet(worksheet_name)
+        sheet.clear()
+        sheet.update(values=data_to_upload, range_name='A1')
+        print(f"🚀 [적재 완료] 타겟 시트 [{target_doc.title}] 동기화 성공!")
+    except Exception as e:
+        print(f"❌ 시트 적재 실패 (ID: {TARGET_SPREADSHEET_ID}): {e}")
 
-    # ✅ 수정 10: 컬럼 수 동적 출력
     print(f"\n🎉 고유 ID 기반 마스터 {len(COLUMN_ORDER)}대 컬럼 데이터 최신화 파이프라인이 정상 종료되었습니다!")
 
 
