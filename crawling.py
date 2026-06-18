@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 # OpenAI 기본 설정
 openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", "YOUR_LOCAL_API_KEY"))
 
-# ✅ GitHub Secrets 이름과 1:1 매칭 완료
+# ✅ GitHub Secrets 이름과 1:1 매칭
 SOURCE_SPREADSHEET_ID = os.environ.get("SOURCE_SPREADSHEET_ID")
 TARGET_SPREADSHEET_ID = os.environ.get("TARGET_SPREADSHEET_ID")
 
@@ -22,7 +22,7 @@ TITLE_COLUMNS = [f"{c}_{n}" for c in CONCEPTS for n in NUMS]  # A_1 ~ E_3 총 15
 BASE_COLUMNS = ["ID", "상품명", "가격", "URL", "이미지URL", "지역", "출발공항"]
 COLUMN_ORDER = BASE_COLUMNS + TITLE_COLUMNS
 
-# 동시 호출 제한 (환경 변수로 제어 가능, 기본값 15)
+# 동시 호출 제한
 LLM_CONCURRENCY = int(os.environ.get("LLM_CONCURRENCY", "15"))
 
 
@@ -41,10 +41,6 @@ def get_gspread_client():
 # [함수 2] 단일 LLM 타이틀 생성기
 # ==========================================
 async def generate_naver_titles_llm(p, semaphore):
-    """
-    단일 상품 1개에 완벽히 몰입하여, 네이버 SEO 가이드라인에 맞춘
-    공백 포함 35자~45자 사이의 묵직한 명사구 타이틀 15개를 생성합니다.
-    """
     async with semaphore:
         departure = f"[{p['출발공항']}출발]" if p['출발공항'] != "없음" else ""
 
@@ -81,7 +77,7 @@ async def generate_naver_titles_llm(p, semaphore):
 
 [❌ 전 콘셉트 공통 제약 가이드라인]
 1. 글자 수 제약: 모든 상품명은 공백 포함 최소 35자 ~ 최대 45자 사이로 풍성하게 구성한다. (45자 절대 초과 금지)
-2. ★ 문장부호 사용 제한 및 정제 규칙 ★: 최종 생성되는 모든 상품명 내부에는 쉼표(,), 느낌표(!), 물결(~), 플러스(+) 같은 부호나 특수문자를 절대 포함할 수 없다. 기간이나 범위를 표현할 때 물결 기호(ex: 5~6일)가 필요하다면 무조건 붙임표 대시 기호(ex: 5-6일)로 치환하여 작성해야 한다. 쉼표และ 느낌표가 들어갈 자리는 깔끔하게 공백(띄어쓰기) 처리한다.
+2. ★ 문장부호 사용 제한 및 정제 규칙 ★: 최종 생성되는 모든 상품명 내부에는 쉼표(,), 느낌표(!), 물결(~), 플러스(+) 같은 부호나 특수문자를 절대 포함할 수 없다. 기간이나 범위를 표현할 때 물결 기호(ex: 5~6일)가 필요하다면 무조건 붙임표 대시 기호(ex: 5-6일)로 치환하여 작성해야 한다. 쉼표와 느낌표가 들어갈 자리는 깔끔하게 공백(띄어쓰기) 처리한다.
 3. 날것 노출 금지: '#' 기호나 해시태그 형태를 그대로 노출하지 마라. (ex: #디너크루즈 -> 로맨틱디너크루즈투어, #아티타야CC -> 아티타야CC품격라운딩)
 4. 정제성: '신상품', '특가', '대박' 같은 유치한 홍보성 접두사나 특수문자는 전면 배제한다. 최종 출력물 텍스트 내부에 "주의:", "경고:", "가이드:" 등 시스템 지시어 성격의 텍스트를 삽입하는 것을 절대 금지한다.
 5. 문장 자율성: 기계적인 명사 나열에만 집착하지 말고, 조사와 마케팅 수식어를 자연스럽게 결합하여 소비자가 읽었을 때 매력적인 '명사구' 형태로 늘려라. "행복한여행", "특별한여정" 같이 글자 수 채우기용 무의미한 콤보 수식어는 남발하지 마라.
@@ -142,7 +138,6 @@ async def run_pipeline():
 
     gc = get_gspread_client()
     
-    # SOURCE_SPREADSHEET_ID에서 상품 리스트 로드
     print("📥 [1단계] 타겟 상품리스트 URL 로드 중...")
     try:
         source_doc = gc.open_by_key(SOURCE_SPREADSHEET_ID)
@@ -164,7 +159,6 @@ async def run_pipeline():
 
     print(f"✅ 총 {len(target_tasks)}개의 크롤링 타겟 URL을 확보했습니다.")
 
-    # 2. URL 리스트 순회 및 전수 크롤링 (Playwright)
     print("\n🕵️ [2단계] 전수 크롤링 및 실시간 스크롤 로딩 시작...")
     crawled_raw_products = []
 
@@ -181,7 +175,12 @@ async def run_pipeline():
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     print(f"🔄 로딩 중: {task['region']} ({task['airport']}) [시도 {attempt}/{MAX_RETRIES}]")
-                    await page.goto(task['url'], wait_until="domcontentloaded", timeout=30000)
+                    
+                    # 💡 대기 기준 변경: 비동기 데이터 렌더링 확보를 위해 networkidle까지 강력 보장
+                    await page.goto(task['url'], wait_until="networkidle", timeout=40000)
+
+                    # 💡 안전 장치: 상품 리스트 레이아웃 자체의 렌더링이 보장될 때까지 추가 대기
+                    await page.wait_for_selector(".prod_list_wrap ul.type > li", timeout=10000)
 
                     total_count = 20
                     try:
@@ -193,52 +192,49 @@ async def run_pipeline():
                         pass
 
                     needed_scrolls = (total_count - 1) // 20
-                    for _ in range(needed_scrolls):
+                    for s in range(needed_scrolls):
                         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        try:
-                            await page.wait_for_load_state("networkidle", timeout=5000)
-                        except:
-                            await asyncio.sleep(1.5)
+                        await asyncio.sleep(1.5)  # 💡 물리적 스크롤 후 이미지 렌더링을 유도하는 안전 슬립 지속
 
+                    # 렌더링 완료 후 리스트 파싱 진행
                     items = await page.query_selector_all(".prod_list_wrap ul.type > li")
                     for item in items:
-                        main_info = await item.query_selector(":scope > .inr.right")
-                        img_check = await item.query_selector(":scope > .inr.img")
+                        main_info = await item.query_selector(".inr.right")
+                        img_check = await item.query_selector(".inr.img")
                         if not main_info:
                             continue
 
+                        # 💡 셀렉터 매칭 최적화: 타이틀 확실하게 확보
                         title_el = await main_info.query_selector(".item_title")
-                        full_title = (await title_el.inner_text()).strip() if title_el else "제목 없음"
+                        if not title_el:
+                            continue
+                        full_title = (await title_el.inner_text()).strip()
 
                         price_el = await main_info.query_selector(".price")
                         price_raw = await price_el.inner_text() if price_el else "0"
                         price = int("".join(filter(str.isdigit, price_raw))) if any(c.isdigit() for c in price_raw) else 0
 
+                        # 💡 이미지 파싱 로직 간소화 및 정밀화
                         img_url = ""
                         if img_check:
                             img_el = await img_check.query_selector("img")
                             if img_el:
+                                # 레이지 로딩 대응: data-src를 먼저 확인 후 없으면 src 확보
                                 data_src = await img_el.get_attribute("data-src")
                                 src = await img_el.get_attribute("src")
                                 potential_url = data_src if data_src else src
 
                                 if potential_url and "bg_alpha" not in potential_url:
                                     img_url = potential_url.strip()
-                                else:
-                                    all_imgs = await img_check.query_selector_all("img")
-                                    for im in all_imgs:
-                                        i_src = await im.get_attribute("src")
-                                        i_data = await im.get_attribute("data-src")
-                                        target_url = i_data if i_data else i_src
-                                        if target_url and "bg_alpha" not in target_url:
-                                            img_url = target_url.strip()
-                                            break
 
                         if img_url and img_url.startswith("//"):
                             img_url = "https:" + img_url
 
+                        # 로그 확인용 디버깅 메세지
                         if not img_url:
-                            print(f"⚠️ 이미지 URL 없음: 상품명={full_title[:20]}")
+                            print(f"⚠️ 이미지 URL 누락: 상품명={full_title[:15]}")
+                        if full_title == "제목 없음":
+                            print(f"⚠️ 제목 파싱 실패 케이스 발견 (ID 대조용)")
 
                         unique_str = f"{full_title}_{price}_{task['airport']}"
                         product_id = hashlib.md5(unique_str.encode('utf-8')).hexdigest()[:8]
@@ -260,7 +256,7 @@ async def run_pipeline():
                     if attempt == MAX_RETRIES:
                         print(f"❌ 최대 재시도 횟수 초과. 해당 URL 최종 스킵: {task['url']}")
                     else:
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(3)
 
         await browser.close()
 
@@ -275,7 +271,6 @@ async def run_pipeline():
 
     worksheet_name = "github"
 
-    # TARGET_SPREADSHEET_ID에서 기존 적재 타이틀 비교 연산 진행
     try:
         target_doc = gc.open_by_key(TARGET_SPREADSHEET_ID)
         old_records = target_doc.worksheet(worksheet_name).get_all_records()
