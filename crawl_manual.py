@@ -100,7 +100,7 @@ async def main():
         await browser.close()
         
     if update_payload:
-        target_sheet.batch_clear(["G2:K1000"])
+        target_sheet.batch_clear(["H2:L"])
         end_row = 1 + len(update_payload)
         target_range = f"G2:K{end_row}"
         
