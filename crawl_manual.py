@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import re  # 정규식 라이브러리 추가
 import gspread
 from google.oauth2.service_account import Credentials
 from playwright.async_api import async_playwright
@@ -21,20 +22,22 @@ def parse_product_info(html_content, url):
         title_element = soup.select_one(".item_title")
         title = title_element.get_text(strip=True) if title_element else "N/A"
         
+        # [수정] 가격 추출 로직 고도화
         price_elements = soup.select(".price")
         price = "N/A"
         for elem in price_elements:
             txt = elem.get_text(strip=True)
-            if "원" not in txt and txt:
-                price = txt.replace(",", "")
+            # 숫자와 쉼표, 원 등이 섞여 있는 문자열에서 숫자만 추출
+            digits = re.sub(r'[^0-9]', '', txt)
+            if digits:  # 숫자가 존재한다면
+                price = int(digits)  # 파이썬 int(정수) 타입으로 변환!
                 break
                 
-        # [🔥 최종 고도화] bg_alpha만 아니면 예외 없이 무조건 첫 배너 이미지 추출
+        # bg_alpha만 아니면 예외 없이 무조건 첫 배너 이미지 추출
         image_link = "N/A"
         img_elements = soup.select(".swiper-slide img")
         for img in img_elements:
             src = img.get("src", "").strip()
-            # 투명 플레이스홀더만 아니면 확장자(jpg, JPG, jpeg) 불문하고 매핑
             if src and "bg_alpha" not in src:
                 image_link = src
                 break
@@ -67,6 +70,7 @@ async def main():
         )
         page = await context.new_page()
         
+        # [참고] CSS 차단 때문에 가격 태그 구조가 뒤틀린다면 아래 라인에서 "stylesheet"를 제거해야 할 수 있습니다.
         await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media"] or "analytics" in route.request.url else route.continue_())
         
         for idx, url in enumerate(urls_to_crawl, start=2):
@@ -99,8 +103,15 @@ async def main():
         target_sheet.batch_clear(["G2:K1000"])
         end_row = 1 + len(update_payload)
         target_range = f"G2:K{end_row}"
-        target_sheet.update(range_name=target_range, values=update_payload)
+        
+        # [수정] value_input_option="USER_ENTERED" 추가 (시트가 숫자로 인식하도록 유도)
+        target_sheet.update(
+            range_name=target_range, 
+            values=update_payload, 
+            value_input_option="USER_ENTERED"
+        )
         print(f"[+] [동기화 최종 완료] 모든 상품 정보가 무결점으로 업데이트되었습니다.")
 
 if __name__ == "__main__":
+    async_playwright_used = True
     asyncio.run(main())
