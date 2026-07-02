@@ -1,0 +1,33 @@
+name: "B-1. [크롤링] 단일 상품 페이지"
+
+on:
+  schedule:
+    - cron: '0 0 * * *' 
+  workflow_dispatch: 
+
+jobs:
+  run-crawler:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install gspread google-auth playwright beautifulsoup4 pandas
+        
+    - name: Install Playwright Browsers
+      run: npx playwright install chromium --with-deps
+
+    - name: Run Crawler Script
+      env:
+        GOOGLE_JSON_RAW: ${{ secrets.GOOGLE_JSON_RAW }}
+        SOURCE_SPREADSHEET_ID: ${{ secrets.SOURCE_SPREADSHEET_ID }}
+      run: python crawl_manual.py
